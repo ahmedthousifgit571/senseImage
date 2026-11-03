@@ -1,0 +1,785 @@
+/* ============================================
+   SENSEIMAGE — flight design system
+   Two global modes on <html data-mode>: day (optical) and night (EO/IR).
+   Sections pick a tone (paper, wash, graphite, sky); each tone reads the active mode's palette.
+   A fixed WebGL sky sits behind the page and shows through "sky" sections; the drone layer flies above.
+   ============================================ */
+
+@import 'tailwindcss';
+
+/* Fingers rather than a cursor. */
+@custom-variant touch {
+  @media (hover: none), (pointer: coarse) {
+    @slot;
+  }
+}
+
+/* A cursor that can hover. */
+@custom-variant fine {
+  @media (hover: hover) and (pointer: fine) {
+    @slot;
+  }
+}
+
+/* A phone held upright, where the page stacks. */
+@custom-variant stacked {
+  @media (max-width: 47.99rem) and (orientation: portrait) {
+    @slot;
+  }
+}
+
+/* A phone on its side, too short for tall compositions. */
+@custom-variant short {
+  @media (max-height: 32.5rem) and (orientation: landscape) {
+    @slot;
+  }
+}
+
+@custom-variant night (&:where([data-mode='night'], [data-mode='night'] *));
+@custom-variant day (&:where([data-mode='day'], [data-mode='day'] *));
+
+@theme inline {
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, 'Cascadia Mono', Menlo, monospace;
+
+  /* Tone-aware colours: every section sets --t-* from its tone. */
+  --color-tone: var(--t-bg);
+  --color-tone-2: var(--t-bg-2);
+  --color-panel: var(--t-panel);
+  --color-ink: var(--t-fg);
+  --color-mute: var(--t-muted);
+  --color-rule: var(--t-line);
+  --color-accent: var(--t-accent);
+  --color-signal: var(--signal);
+}
+
+@theme {
+  --color-cobalt: #0b3b75;
+  --color-sun: #f5b400;
+  --color-phosphor: #00f5d4;
+  --color-graphite: #15171a;
+  --color-sand: #eae7e0;
+
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-soft: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* ---------- Mode palettes ---------- */
+:root,
+[data-mode='day'] {
+  --paper: #eae7e0;
+  --paper-2: #f5f3ef;
+  --paper-panel: #f8f6f2;
+  --ink: #111316;
+  --ink-muted: #5d6066;
+  --ink-line: rgb(17 19 22 / 0.14);
+
+  --graphite: #15171a;
+  --graphite-2: #1c1f23;
+  --on-graphite: #efece6;
+  --on-graphite-muted: #9b9ea4;
+  --graphite-line: rgb(239 236 230 / 0.14);
+
+  --sky-fg: #ffffff;
+  --sky-muted: rgb(255 255 255 / 0.74);
+  --sky-line: rgb(255 255 255 / 0.3);
+
+  /* The hero's dawn runs from a blue zenith to a near-white horizon glow, which washes out white type,
+     so by day its copy reads in the zenith's navy over a haze of that light (an rgb triplet, for alpha).
+     Display type takes the lighter slate; small type keeps the deep navy so it holds its contrast. */
+  --horizon-display: #2e4a64;
+  --horizon-fg: #0f2236;
+  --horizon-muted: #33475b;
+  --horizon-line: rgb(15 34 54 / 0.32);
+  --horizon-signal: #7a4b00;
+  --horizon-haze: 244 240 234;
+
+  --signal: #f5b400;
+  --accent: #0b3b75;
+  color-scheme: light;
+}
+
+[data-mode='night'] {
+  --paper: #05090e;
+  --paper-2: #071018;
+  --paper-panel: #0a131b;
+  --ink: #dcf3ee;
+  --ink-muted: #7e99a1;
+  --ink-line: rgb(0 245 212 / 0.14);
+
+  --graphite: #0a1218;
+  --graphite-2: #0e1820;
+  --on-graphite: #dcf3ee;
+  --on-graphite-muted: #7e99a1;
+  --graphite-line: rgb(0 245 212 / 0.16);
+
+  --sky-fg: #dcf3ee;
+  --sky-muted: rgb(220 243 238 / 0.72);
+  --sky-line: rgb(0 245 212 / 0.32);
+
+  --horizon-display: var(--sky-fg);
+  --horizon-fg: var(--sky-fg);
+  --horizon-muted: var(--sky-muted);
+  --horizon-line: var(--sky-line);
+  --horizon-signal: #00f5d4;
+  --horizon-haze: 6 14 30;
+
+  --signal: #00f5d4;
+  --accent: #00f5d4;
+  color-scheme: dark;
+}
+
+:root {
+  --gutter: clamp(16px, 3.4vw, 56px);
+  --frame-x: clamp(16px, 2.6vw, 40px);
+  --frame-y: clamp(14px, 2vw, 24px);
+  --section-y: clamp(96px, 12vw, 192px);
+  --radius: clamp(16px, 1.8vw, 28px);
+}
+
+/* ---------- Tones ---------- */
+.tone-paper,
+.tone-wash,
+.tone-graphite,
+.tone-sky,
+.tone-horizon {
+  color: var(--t-fg);
+}
+
+.tone-paper,
+.tone-wash,
+.tone-graphite {
+  background: var(--t-bg);
+}
+
+.tone-paper {
+  --t-bg: var(--paper);
+  --t-bg-2: var(--paper-2);
+  --t-panel: var(--paper-panel);
+  --t-fg: var(--ink);
+  --t-muted: var(--ink-muted);
+  --t-line: var(--ink-line);
+  --t-accent: var(--accent);
+}
+
+.tone-wash {
+  --t-bg: var(--paper-2);
+  --t-bg-2: var(--paper);
+  --t-panel: var(--paper-panel);
+  --t-fg: var(--ink);
+  --t-muted: var(--ink-muted);
+  --t-line: var(--ink-line);
+  --t-accent: var(--accent);
+}
+
+.tone-graphite {
+  --t-bg: var(--graphite);
+  --t-bg-2: var(--graphite-2);
+  --t-panel: var(--graphite-2);
+  --t-fg: var(--on-graphite);
+  --t-muted: var(--on-graphite-muted);
+  --t-line: var(--graphite-line);
+  --t-accent: var(--signal);
+}
+
+/* Transparent: the WebGL sky behind the page shows through. */
+.tone-sky {
+  --t-bg: transparent;
+  --t-bg-2: rgb(0 0 0 / 0.2);
+  --t-panel: rgb(255 255 255 / 0.08);
+  --t-fg: var(--sky-fg);
+  --t-muted: var(--sky-muted);
+  --t-line: var(--sky-line);
+  --t-accent: var(--signal);
+}
+
+/* The hero's sky: ink by day, sky type at night. Its signal darkens with it so amber still reads. */
+.tone-horizon {
+  --t-bg: transparent;
+  --t-bg-2: rgb(var(--horizon-haze) / 0.3);
+  --t-panel: rgb(var(--horizon-haze) / 0.2);
+  --t-fg: var(--horizon-fg);
+  --t-muted: var(--horizon-muted);
+  --t-line: var(--horizon-line);
+  --t-accent: var(--horizon-signal);
+  --signal: var(--horizon-signal);
+}
+
+@layer base {
+  html {
+    background: var(--paper);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    overflow-x: clip;
+  }
+
+  /* No body background: the fixed sky canvas must show through [data-sky] sections. */
+  body {
+    font-family: var(--font-sans);
+    color: var(--ink);
+    overflow-x: clip;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  a,
+  button,
+  [role='tab'],
+  [role='switch'] {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  ::selection {
+    background: var(--ink);
+    color: var(--paper);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--t-accent, var(--accent));
+    outline-offset: 3px;
+  }
+}
+
+/* ---------- Lenis ---------- */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: clip;
+}
+
+@layer components {
+  /* Expanded capitals, like aircraft livery. */
+  .display {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-stretch: 125%;
+    line-height: 0.86;
+    letter-spacing: -0.02em;
+    text-transform: uppercase;
+  }
+
+  .headline {
+    font-family: var(--font-display);
+    font-weight: 500;
+    line-height: 0.98;
+    letter-spacing: -0.035em;
+    text-wrap: balance;
+  }
+
+  /* Two-tone headlines: the second clause steps back instead of turning italic. */
+  .headline .dim,
+  .display .dim,
+  .statement .dim {
+    color: var(--t-muted);
+  }
+
+  .statement {
+    font-family: var(--font-display);
+    font-weight: 400;
+    line-height: 1.05;
+    letter-spacing: -0.032em;
+  }
+
+  .label {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 600;
+    font-stretch: 112%;
+    line-height: 1.3;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+
+  .telemetry {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.4;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-family: var(--font-sans);
+    font-size: 10px;
+    font-weight: 600;
+    font-stretch: 112%;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--t-muted);
+  }
+
+  .eyebrow::before {
+    content: '';
+    width: 22px;
+    height: 1px;
+    background: currentColor;
+    opacity: 0.7;
+  }
+
+  .shell {
+    padding-left: var(--gutter);
+    padding-right: var(--gutter);
+  }
+
+  /* stillform's underlined text CTA with a trailing arrow. */
+  .link-arrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.9rem;
+    min-height: 44px;
+    font-size: 12px;
+    font-weight: 600;
+    font-stretch: 112%;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .link-arrow > span:first-child {
+    background: linear-gradient(currentColor, currentColor) 0 100% / 100% 1px no-repeat;
+    padding-bottom: 3px;
+    transition: background-size 0.5s var(--ease-expo);
+  }
+
+  .link-arrow:hover > span:first-child {
+    background-size: 0% 1px;
+    background-position: 100% 100%;
+  }
+
+  .link-arrow > svg {
+    transition: transform 0.5s var(--ease-expo);
+  }
+
+  .link-arrow:hover > svg {
+    transform: translateX(6px);
+  }
+
+  /* Outline pill, as on stillform's "Enter residence". */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    min-height: 48px;
+    padding: 0 1.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--t-line);
+    font-size: 11px;
+    font-weight: 600;
+    font-stretch: 112%;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    transition:
+      background-color 0.35s var(--ease-soft),
+      border-color 0.35s var(--ease-soft),
+      color 0.35s var(--ease-soft);
+  }
+
+  .pill:hover {
+    border-color: var(--t-fg);
+    background: var(--t-fg);
+    color: var(--t-bg, var(--paper));
+  }
+
+  .tone-sky .pill:hover {
+    color: #111316;
+  }
+
+  .pill-solid {
+    background: var(--t-fg);
+    border-color: var(--t-fg);
+    color: var(--t-bg);
+  }
+
+  .tone-sky .pill-solid {
+    color: #111316;
+  }
+
+  .pill-solid:hover {
+    background: transparent;
+    color: var(--t-fg);
+  }
+
+  /* Hover roll: the label slides up and an identical copy follows it in. */
+  .roll {
+    position: relative;
+    display: inline-flex;
+    overflow: hidden;
+    vertical-align: top;
+  }
+
+  .roll > span {
+    display: block;
+    transition: transform 0.55s var(--ease-expo);
+  }
+
+  .roll > span + span {
+    position: absolute;
+    inset: 0;
+    transform: translateY(105%);
+  }
+
+  .roll-host:hover .roll > span:first-child,
+  .roll-host:focus-visible .roll > span:first-child {
+    transform: translateY(-105%);
+  }
+
+  .roll-host:hover .roll > span + span,
+  .roll-host:focus-visible .roll > span + span {
+    transform: translateY(0);
+  }
+
+  /* Corner ticks for HUD frames. */
+  .brackets {
+    --b: 12px;
+    --c: currentColor;
+    background:
+      linear-gradient(var(--c), var(--c)) top left / var(--b) 1px no-repeat,
+      linear-gradient(var(--c), var(--c)) top left / 1px var(--b) no-repeat,
+      linear-gradient(var(--c), var(--c)) top right / var(--b) 1px no-repeat,
+      linear-gradient(var(--c), var(--c)) top right / 1px var(--b) no-repeat,
+      linear-gradient(var(--c), var(--c)) bottom left / var(--b) 1px no-repeat,
+      linear-gradient(var(--c), var(--c)) bottom left / 1px var(--b) no-repeat,
+      linear-gradient(var(--c), var(--c)) bottom right / var(--b) 1px no-repeat,
+      linear-gradient(var(--c), var(--c)) bottom right / 1px var(--b) no-repeat;
+  }
+
+  .field {
+    width: 100%;
+    min-height: 48px;
+    padding: 0.75rem 0;
+    border: 0;
+    border-bottom: 1px solid var(--t-line);
+    background: transparent;
+    color: var(--t-fg);
+    font-size: 16px;
+    transition: border-color 0.25s var(--ease-soft);
+  }
+
+  .field::placeholder {
+    color: var(--t-muted);
+    opacity: 0.7;
+  }
+
+  .field:focus {
+    outline: none;
+    border-color: var(--t-fg);
+  }
+
+  .field[aria-invalid='true'] {
+    border-color: #e5484d;
+  }
+
+  .field-label {
+    font-size: 10px;
+    font-weight: 600;
+    font-stretch: 112%;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--t-muted);
+  }
+
+  /* Day/night image twin: the night layer only shows in EO/IR mode. */
+  .dual-night {
+    opacity: 0;
+    transition: opacity 0.2s linear;
+  }
+
+  [data-mode='night'] .dual-night {
+    opacity: 1;
+  }
+
+  [data-mode='night'] .dual-day:has(+ .dual-night) {
+    opacity: 0;
+  }
+
+  /* EO/IR screen texture. */
+  .scanlines {
+    background: repeating-linear-gradient(to bottom, rgb(0 245 212 / 0.05) 0 1px, transparent 1px 3px);
+    opacity: 0;
+    transition: opacity 0.3s linear;
+  }
+
+  [data-mode='night'] .scanlines {
+    opacity: 1;
+  }
+
+  /* Grounds for the hero copy. By day, haze under the title, along the copy column and across the base
+     row, so ink holds its contrast over both the blue zenith and the cloud deck; the drone flies above it. */
+  .horizon-scrim {
+    background:
+      linear-gradient(to bottom, rgb(var(--horizon-haze) / 0.58), rgb(var(--horizon-haze) / 0.36) 22%, rgb(var(--horizon-haze) / 0.12) 34%, transparent 46%),
+      linear-gradient(to top, rgb(var(--horizon-haze) / 0.62), rgb(var(--horizon-haze) / 0.36) 12%, transparent 28%),
+      linear-gradient(to right, rgb(var(--horizon-haze) / 0.42), rgb(var(--horizon-haze) / 0.2) 30%, transparent 50%);
+  }
+
+  /* Stacked, the copy runs full width under the drone, so the base haze rises to meet it. */
+  @media (width < 64rem) {
+    .horizon-scrim {
+      background:
+        linear-gradient(to bottom, rgb(var(--horizon-haze) / 0.58), rgb(var(--horizon-haze) / 0.36) 22%, rgb(var(--horizon-haze) / 0.12) 34%, transparent 46%),
+        linear-gradient(to top, rgb(var(--horizon-haze) / 0.62), rgb(var(--horizon-haze) / 0.42) 30%, transparent 56%);
+    }
+  }
+
+  /* At night the title sits on open sky and the base row on the dark cloud deck. */
+  [data-mode='night'] .horizon-scrim {
+    background: linear-gradient(to bottom, rgb(var(--horizon-haze) / 0.38), transparent 34%, transparent 62%, rgb(var(--horizon-haze) / 0.55));
+  }
+
+  /* A tight ground of that haze behind small type out on open sky, like the HUD readouts. */
+  .halo {
+    text-shadow:
+      0 0 2px rgb(var(--horizon-haze) / 0.85),
+      0 0 8px rgb(var(--horizon-haze) / 0.9),
+      0 0 16px rgb(var(--horizon-haze) / 0.6);
+  }
+
+  .marquee-track {
+    animation: marquee 46s linear infinite;
+  }
+
+  .logo-mono {
+    filter: grayscale(1) brightness(0.2);
+    opacity: 0.62;
+    transition:
+      filter 0.4s var(--ease-soft),
+      opacity 0.4s var(--ease-soft);
+  }
+
+  .logo-mono:hover {
+    filter: none;
+    opacity: 1;
+  }
+
+  [data-mode='night'] .logo-mono {
+    filter: brightness(0) invert(1);
+    opacity: 0.6;
+  }
+}
+
+/* The nav follows the tone of the section beneath it, over a fade of that tone so scrolling copy
+   dissolves before it reaches the wordmark instead of colliding with it. Sky sections bring their own scrims. */
+.site-nav {
+  --nav-fg: var(--ink);
+  --nav-bg: var(--paper);
+}
+
+.site-nav::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(var(--frame-y) + 76px);
+  background: linear-gradient(to bottom, var(--nav-bg) 62%, transparent);
+  pointer-events: none;
+  transition: opacity 0.4s var(--ease-soft);
+}
+
+.site-nav[data-on='wash'] {
+  --nav-bg: var(--paper-2);
+}
+
+/* Over open sky the fade is a dusk shade, so light copy scrolling up under the wordmark dims out
+   instead of crossing it; the hero's horizon brings its own haze. */
+.site-nav[data-on='sky'] {
+  --nav-fg: var(--sky-fg);
+  --nav-bg: rgb(6 12 24 / 0.6);
+}
+
+.site-nav[data-on='horizon'] {
+  --nav-fg: var(--horizon-fg);
+}
+
+.site-nav[data-on='horizon']::before {
+  opacity: 0;
+}
+
+.site-nav[data-on='graphite'] {
+  --nav-fg: var(--on-graphite);
+  --nav-bg: var(--graphite);
+}
+
+/* The dropdown sits on its own glass panel so its links never collide with the page behind. */
+.site-menu {
+  background: color-mix(in srgb, var(--nav-bg) 82%, transparent);
+  box-shadow: 0 18px 40px -24px rgb(0 0 0 / 0.45);
+}
+
+.site-nav[data-on='sky'] .site-menu {
+  background: rgb(6 12 24 / 0.5);
+}
+
+.site-nav[data-on='horizon'] .site-menu {
+  background: rgb(var(--horizon-haze) / 0.78);
+}
+
+/* Cuts the IndraKavach window (sized by --ww / --wh on the stage) out of the page's copy. */
+.ik-window-mask {
+  -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  -webkit-mask-size:
+    100% 100%,
+    var(--ww) var(--wh);
+  -webkit-mask-position:
+    0 0,
+    50% 50%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-composite: xor;
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-size:
+    100% 100%,
+    var(--ww) var(--wh);
+  mask-position:
+    0 0,
+    50% 50%;
+  mask-repeat: no-repeat;
+  mask-composite: exclude;
+}
+
+/* SplitText word masks on headlines: room past the tight 0.98 line for caps and descenders, given
+   back in margin so the lines don't move. */
+.split-word-mask {
+  padding-block: 0.12em 0.2em;
+  margin-block: -0.12em -0.2em;
+}
+
+/* The system's data link: --p fills a link, --k runs a packet along it (its bright head crosses the
+   link while --k goes 0 → 0.5). Vertical when stacked, horizontal on desktop; fully drawn without motion. */
+.link-fill {
+  scale: 1 var(--p, 1);
+  transform-origin: top;
+}
+
+.link-packet {
+  translate: 0 calc((var(--k, 0) * 2 - 1) * 100%);
+  background: linear-gradient(to bottom, transparent 55%, #fff);
+}
+
+@media (width >= 64rem) {
+  .link-fill {
+    scale: var(--p, 1) 1;
+    transform-origin: left;
+  }
+
+  .link-packet {
+    translate: calc((var(--k, 0) * 2 - 1) * 100%) 0;
+    background: linear-gradient(to right, transparent 55%, #fff);
+  }
+}
+
+/* Application rows light while hovered or crossing the middle of the screen (is-live). Their detail
+   only hides once the scan is armed, so without motion every row stays fully shown. */
+.app-row :is(.app-num, .app-title, .app-detail, .app-bar) {
+  transition:
+    color 0.4s var(--ease-soft),
+    opacity 0.45s var(--ease-soft),
+    translate 0.6s var(--ease-expo),
+    scale 0.6s var(--ease-expo);
+}
+
+.app-row .app-bar {
+  scale: 1 0;
+}
+
+.app-scan .app-detail {
+  opacity: 0;
+  translate: -10px 0;
+}
+
+.app-row.is-live .app-num {
+  color: var(--t-accent);
+}
+
+.app-row.is-live .app-bar,
+.app-scan .app-row.is-live :is(.app-title, .app-detail) {
+  scale: 1;
+  translate: 0 0;
+  opacity: 1;
+}
+
+.app-scan .app-row.is-live .app-title {
+  translate: 10px 0;
+}
+
+@media (hover: hover) {
+  .app-row:hover .app-num {
+    color: var(--t-accent);
+  }
+
+  .app-row:hover .app-bar,
+  .app-scan .app-row:hover .app-detail {
+    scale: 1;
+    translate: 0 0;
+    opacity: 1;
+  }
+
+  .app-scan .app-row:hover .app-title {
+    translate: 10px 0;
+  }
+}
+
+/* The drone layer replaces bay fallbacks once WebGL is flying. */
+[data-flight='on'] .bay-fallback {
+  display: none;
+}
+
+/* Painted before the sky shader's first frame, and if WebGL is unavailable. */
+.sky-backdrop {
+  background: linear-gradient(180deg, #10284f 0%, #3c628f 22%, #c9cfd6 34%, #f0dcc5 36%, #a9b6c8 52%, #e9ddd0 100%);
+}
+
+[data-mode='night'] .sky-backdrop {
+  background: linear-gradient(180deg, #020608 0%, #04191a 34%, #0a3a37 37%, #062221 100%);
+}
+
+@keyframes marquee {
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+/* If scripts never run, the preloader still gets out of the way. */
+.preloader {
+  animation: preloader-failsafe 0.01s 7s forwards;
+}
+
+@keyframes preloader-failsafe {
+  to {
+    visibility: hidden;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track {
+    animation: none;
+  }
+
+  .preloader {
+    display: none;
+  }
+}
